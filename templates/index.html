@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Cirkit LED Control</title>
+
+    <link rel="stylesheet"
+          href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="container">
+
+    <h1>Virtual LED Control</h1>
+
+    <p>Flask + Cirkit Designer</p>
+
+    <div id="led" class="led"></div>
+
+    <h2 id="status">LED OFF</h2>
+
+    <button onclick="controlLED('on')">
+        TURN ON
+    </button>
+
+    <button onclick="controlLED('off')">
+        TURN OFF
+    </button>
+
+</div>
+
+<script>
+
+async function controlLED(action) {
+
+    try {
+        const response = await fetch(`/led/${action}`, {
+            method: "POST"
+        });
+
+        if (!response.ok) {
+            throw new Error("Command failed");
+        }
+
+        const data = await response.json();
+
+        document.getElementById("status").innerText =
+            "LED " + data.status;
+
+        document.getElementById("led").style.background =
+            data.status === "ON" ? "red" : "#333";
+
+    } catch (error) {
+        document.getElementById("status").innerText =
+            "Connection error";
+    }
+}
+
+</script>
+
+</body>
+</html>
