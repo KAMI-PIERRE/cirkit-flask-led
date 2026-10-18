@@ -1,9 +1,9 @@
-import os
-import time
-import uuid
-
 from flask import Flask, render_template, jsonify
 import paho.mqtt.client as mqtt
+import threading
+import json
+import time
+import os
 
 app = Flask(__name__)
 
@@ -14,167 +14,179 @@ app = Flask(__name__)
 MQTT_BROKER = "test.mosquitto.org"
 MQTT_PORT = 1883
 
-MQTT_TOPIC = "kami/cirkit/led/control"
+MQTT_TOPIC = "kami/cirkit/weight/data"
 
-# Track the most recently requested state.
-# This is not confirmation of the physical/simulated LED state.
-led_state = {
-    "status": "OFF"
+# ==========================================
+# SHARED SENSOR DATA
+# ==========================================
+
+sensor_data = {
+    "weight_kg": 0,
+    "threshold_kg": 3.0,
+    "led": "OFF",
+    "buzzer": "OFF",
+    "alert": "NORMAL",
+    "last_update": None,
+    "connected": False
 }
 
+data_lock = threading.Lock()
 
 # ==========================================
-# PUBLISH MQTT COMMAND
+# MQTT CALLBACKS
 # ==========================================
 
-def publish_mqtt_command(command):
-    client_id = f"flask-led-{uuid.uuid4().hex[:12]}"
+def on_connect(client, userdata, flags, reason_code, properties):
 
-    client = mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
-        client_id=client_id
-    )
+    print("MQTT connection result:", reason_code)
+
+    if reason_code == 0:
+
+        client.subscribe(MQTT_TOPIC)
+
+        print("Subscribed to:", MQTT_TOPIC)
+
+
+def on_message(client, userdata, msg):
 
     try:
-        print(f"Connecting to MQTT broker: {MQTT_BROKER}")
 
-        client.connect(
-            MQTT_BROKER,
-            MQTT_PORT,
-            keepalive=30
-        )
+        payload = msg.payload.decode("utf-8")
 
-        client.loop_start()
+        data = json.loads(payload)
 
-        # Give the client time to establish its connection.
-        deadline = time.time() + 5
+        weight = float(data["weight_kg"])
 
-        while not client.is_connected() and time.time() < deadline:
-            time.sleep(0.1)
+        if not (0 <= weight <= 100000):
+            raise ValueError("Invalid weight")
 
-        if not client.is_connected():
-            raise TimeoutError("MQTT connection timed out")
+        threshold = 3.0
 
-        info = client.publish(
-            MQTT_TOPIC,
-            payload=command,
-            qos=0,
-            retain=False
-        )
+        alert_active = weight >= threshold
 
-        info.wait_for_publish(timeout=5)
+        with data_lock:
 
-        if not info.is_published():
-            raise TimeoutError("MQTT message was not confirmed as sent")
+            sensor_data["weight_kg"] = weight
 
-        print(f"Published {command} to {MQTT_TOPIC}")
+            sensor_data["threshold_kg"] = threshold
 
-        return True, None
+            sensor_data["led"] = (
+                "ON" if alert_active else "OFF"
+            )
 
-    except Exception as error:
-        print(f"MQTT error: {error}")
-        return False, str(error)
+            sensor_data["buzzer"] = (
+                "ON" if alert_active else "OFF"
+            )
 
-    finally:
-        try:
-            if client.is_connected():
-                client.disconnect()
+            sensor_data["alert"] = (
+                "THRESHOLD_REACHED"
+                if alert_active
+                else "NORMAL"
+            )
 
-            client.loop_stop()
+            sensor_data["last_update"] = time.time()
 
-        except Exception:
-            pass
+            sensor_data["connected"] = True
+
+        print("Received MQTT:", data)
+
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as e:
+
+        print("Invalid MQTT message:", e)
+
+
+def on_disconnect(client, userdata, disconnect_flags,
+                  reason_code, properties):
+
+    print("MQTT disconnected:", reason_code)
 
 
 # ==========================================
-# HOME PAGE
+# MQTT CLIENT
+# ==========================================
+
+mqtt_client = mqtt.Client(
+    mqtt.CallbackAPIVersion.VERSION2
+)
+
+mqtt_client.on_connect = on_connect
+mqtt_client.on_message = on_message
+mqtt_client.on_disconnect = on_disconnect
+
+
+def start_mqtt():
+
+    try:
+
+        mqtt_client.connect(
+            MQTT_BROKER,
+            MQTT_PORT,
+            keepalive=60
+        )
+
+        mqtt_client.loop_forever()
+
+    except Exception as e:
+
+        print("MQTT error:", e)
+
+
+# ==========================================
+# FLASK ROUTES
 # ==========================================
 
 @app.route("/")
 def home():
+
     return render_template("index.html")
 
 
-# ==========================================
-# LED ON
-# ==========================================
+@app.route("/api/weight")
+def get_weight():
 
-@app.route("/led/on", methods=["POST"])
-def led_on():
+    with data_lock:
 
-    success, error = publish_mqtt_command("ON")
+        data = sensor_data.copy()
 
-    if not success:
-        return jsonify({
-            "status": led_state["status"],
-            "success": False,
-            "message": "Could not send the ON command.",
-            "error": error
-        }), 502
+    last_update = data["last_update"]
 
-    led_state["status"] = "ON"
+    data["connected"] = (
+        last_update is not None
+        and time.time() - last_update < 10
+    )
 
-    return jsonify({
-        "status": "ON",
-        "success": True,
-        "message": "ON command published successfully."
-    })
+    return jsonify(data)
 
 
-# ==========================================
-# LED OFF
-# ==========================================
-
-@app.route("/led/off", methods=["POST"])
-def led_off():
-
-    success, error = publish_mqtt_command("OFF")
-
-    if not success:
-        return jsonify({
-            "status": led_state["status"],
-            "success": False,
-            "message": "Could not send the OFF command.",
-            "error": error
-        }), 502
-
-    led_state["status"] = "OFF"
-
-    return jsonify({
-        "status": "OFF",
-        "success": True,
-        "message": "OFF command published successfully."
-    })
-
-
-# ==========================================
-# LED STATUS API
-# ==========================================
-
-@app.route("/api/led", methods=["GET"])
-def get_led_status():
-
-    return jsonify({
-        "status": led_state["status"]
-    })
-
-
-# ==========================================
-# HEALTH CHECK
-# ==========================================
-
-@app.route("/health", methods=["GET"])
+@app.route("/health")
 def health():
 
     return jsonify({
         "server": "online",
-        "message": "Flask LED Control API is running"
+        "service": "IoT Weight Monitoring System"
     })
 
 
 # ==========================================
-# RUN LOCALLY
+# START MQTT THREAD
+# ==========================================
+
+mqtt_thread = threading.Thread(
+    target=start_mqtt,
+    daemon=True
+)
+
+mqtt_thread.start()
+
+
+# ==========================================
+# START FLASK
 # ==========================================
 
 if __name__ == "__main__":
-    app.run(debug=True)
+
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        debug=False
+    )

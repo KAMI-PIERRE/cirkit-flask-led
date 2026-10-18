@@ -2,64 +2,302 @@
 <html lang="en">
 
 <head>
+
     <meta charset="UTF-8">
+
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0">
 
-    <title>Cirkit LED Control</title>
+    <title>IoT Weight Monitoring</title>
 
-    <link rel="stylesheet"
-          href="{{ url_for('static', filename='style.css') }}">
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f0f4f8;
+            color: #263238;
+        }
+
+        header {
+            background: #102a43;
+            color: white;
+            padding: 25px;
+            text-align: center;
+        }
+
+        header h1 {
+            margin: 0;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 35px auto;
+            padding: 20px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns:
+                repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+        }
+
+        .card {
+            background: white;
+            border-radius: 14px;
+            padding: 30px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+        }
+
+        .card h3 {
+            color: #627d98;
+            font-size: 18px;
+        }
+
+        .value {
+            font-size: 38px;
+            font-weight: bold;
+            color: #102a43;
+            margin-top: 20px;
+        }
+
+        .status {
+            padding: 10px 20px;
+            border-radius: 25px;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 15px;
+        }
+
+        .on {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .off {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .normal {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .info {
+            text-align: center;
+            margin-top: 35px;
+            font-size: 16px;
+        }
+
+    </style>
+
 </head>
 
 <body>
 
+<header>
+
+    <h1>IoT Weight Monitoring System</h1>
+
+    <p>ESP32-S3 | Cirkit | MQTT | Flask</p>
+
+</header>
+
 <div class="container">
 
-    <h1>Virtual LED Control</h1>
+    <div class="grid">
 
-    <p>Flask + Cirkit Designer</p>
+        <div class="card">
 
-    <div id="led" class="led"></div>
+            <h3>Current Weight</h3>
 
-    <h2 id="status">LED OFF</h2>
+            <div class="value">
 
-    <button onclick="controlLED('on')">
-        TURN ON
-    </button>
+                <span id="weight">0.00</span> kg
 
-    <button onclick="controlLED('off')">
-        TURN OFF
-    </button>
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h3>Weight Threshold</h3>
+
+            <div class="value">
+
+                <span id="threshold">3.00</span> kg
+
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h3>LED Status</h3>
+
+            <div id="led" class="status off">
+
+                OFF
+
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h3>Buzzer Status</h3>
+
+            <div id="buzzer" class="status off">
+
+                OFF
+
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h3>System Alert</h3>
+
+            <div id="alert" class="status normal">
+
+                NORMAL
+
+            </div>
+
+        </div>
+
+        <div class="card">
+
+            <h3>Device Connection</h3>
+
+            <div id="connection" class="status off">
+
+                OFFLINE
+
+            </div>
+
+        </div>
+
+    </div>
+
+    <div class="info">
+
+        <p>Live data updates every second.</p>
+
+        <p>LED and buzzer activate when weight reaches 3 kg.</p>
+
+    </div>
 
 </div>
 
 <script>
 
-async function controlLED(action) {
+    async function updateDashboard() {
 
-    try {
-        const response = await fetch(`/led/${action}`, {
-            method: "POST"
-        });
+        try {
 
-        if (!response.ok) {
-            throw new Error("Command failed");
+            const response = await fetch("/api/weight");
+
+            if (!response.ok) {
+                throw new Error("API request failed");
+            }
+
+            const data = await response.json();
+
+            document.getElementById("weight").innerText =
+                Number(data.weight_kg).toFixed(2);
+
+            document.getElementById("threshold").innerText =
+                Number(data.threshold_kg).toFixed(2);
+
+            updateStatus("led", data.led);
+
+            updateStatus("buzzer", data.buzzer);
+
+            const alert = document.getElementById("alert");
+
+            if (data.alert === "THRESHOLD_REACHED") {
+
+                alert.innerText = "OVERWEIGHT ALERT";
+
+                alert.className = "status danger";
+
+            } else {
+
+                alert.innerText = "NORMAL";
+
+                alert.className = "status normal";
+
+            }
+
+            const connection =
+                document.getElementById("connection");
+
+            if (data.connected) {
+
+                connection.innerText = "ONLINE";
+
+                connection.className = "status on";
+
+            } else {
+
+                connection.innerText = "OFFLINE";
+
+                connection.className = "status off";
+
+            }
+
+        } catch (error) {
+
+            console.error("Dashboard error:", error);
+
+            const connection =
+                document.getElementById("connection");
+
+            connection.innerText = "OFFLINE";
+
+            connection.className = "status off";
+
         }
 
-        const data = await response.json();
-
-        document.getElementById("status").innerText =
-            "LED " + data.status;
-
-        document.getElementById("led").style.background =
-            data.status === "ON" ? "red" : "#333";
-
-    } catch (error) {
-        document.getElementById("status").innerText =
-            "Connection error";
     }
-}
+
+
+    function updateStatus(elementId, status) {
+
+        const element = document.getElementById(elementId);
+
+        element.innerText = status;
+
+        if (status === "ON") {
+
+            element.className = "status on";
+
+        } else {
+
+            element.className = "status off";
+
+        }
+
+    }
+
+
+    updateDashboard();
+
+    setInterval(updateDashboard, 1000);
 
 </script>
 
